@@ -6,37 +6,55 @@ import torch
 import sys
 import os
 
+# Import the Oracle architecture
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'models')))
 from oracle_lstm import OracleLSTM
 
 class HybridTradingEnv(gym.Env):
     metadata = {'render_modes': ['human']}
 
-    def __init__(self, df: pd.DataFrame, session: str = 'ALL', window_size: int = 30, initial_balance: float = 10000.0, oracle_path: str = '../models/oracle_lstm.pth'):
+    def __init__(self, df: pd.DataFrame, session: str = 'ALL', window_size: int = 30, initial_balance: float = 10000.0, oracle_path: str = '../models/oracle_lstm.pth', scaler_path: str = '../models/oracle_scaler.npz'):
         super(HybridTradingEnv, self).__init__()
         
         self.window_size = window_size
-        self.df = self._filter_session(df.copy(), session).reset_index() 
+        self.df = self._filter_session(df.copy(), session).reset_index(drop=True) 
         self._calculate_atr()
         
+        # Isolate features
         self.feature_cols = [
             c for c in self.df.columns 
             if self.df[c].dtype in [np.float64, np.float32, np.int64, np.int32] 
-            and not c.startswith('env_')
+            and not c.startswith('env_') and c != 'target' and c != 'unnamed: 0'
         ]
         self.data = self.df[self.feature_cols].values.astype(np.float32)
         
-        self.feature_mean = np.mean(self.data, axis=0)
-        self.feature_std = np.std(self.data, axis=0) + 1e-8
+        # --- FIX 1: Z-SCORE NORMALIZATION PERSISTENCE ---
+        # Load training statistics if they exist to prevent distribution shift during forward testing
+        if os.path.exists(scaler_path):
+            scaler_data = np.load(scaler_path)
+            self.feature_mean = scaler_data['mean']
+            self.feature_std = scaler_data['std']
+        else:
+            self.feature_mean = np.mean(self.data, axis=0)
+            self.feature_std = np.std(self.data, axis=0) + 1e-8
+            os.makedirs(os.path.dirname(scaler_path), exist_ok=True)
+            np.savez(scaler_path, mean=self.feature_mean, std=self.feature_std)
         
+        # --- LOAD THE ORACLE ---
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.oracle = OracleLSTM(input_dim=self.data.shape[1]).to(self.device)
+        
+        # Handle instantiation dynamically based on available features
+        input_dim = self.data.shape[1] if self.data.shape[1] > 0 else 10 
+        self.oracle = OracleLSTM(input_dim=input_dim).to(self.device)
         
         if os.path.exists(oracle_path):
             self.oracle.load_state_dict(torch.load(oracle_path, map_location=self.device, weights_only=True))
         self.oracle.eval()
         
+        # --- CONTINUOUS ACTION SPACE ---
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        
+        # --- OBSERVATION SPACE ---
         self.observation_space = spaces.Box(low=0.0, high=5.0, shape=(5,), dtype=np.float32)
         
         self.initial_balance = initial_balance
@@ -44,6 +62,7 @@ class HybridTradingEnv(gym.Env):
         self.peak_equity = self.initial_balance
         self.current_step = self.window_size
         
+        # Trade State
         self.position = 0 
         self.entry_price = 0.0
         self.sl_price = 0.0
@@ -56,11 +75,15 @@ class HybridTradingEnv(gym.Env):
         self.max_hold = 32 
         
     def _calculate_atr(self):
+        # --- FIX 2: PREVENT ATR LOOK-AHEAD BIAS ---
         high_low = self.df['env_high'] - self.df['env_low']
         high_close = np.abs(self.df['env_high'] - self.df['env_close'].shift())
         low_close = np.abs(self.df['env_low'] - self.df['env_close'].shift())
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        self.df['env_atr'] = np.max(ranges, axis=1).rolling(14).mean().bfill()
+        true_range = np.max(ranges, axis=1)
+        
+        # bfill(limit=14) ensures we only fill the initial NaN block, not global future data
+        self.df['env_atr'] = true_range.rolling(14).mean().bfill(limit=14).fillna(0.5)
         
     def _filter_session(self, df: pd.DataFrame, session: str) -> pd.DataFrame:
         if 'time' in df.columns:
@@ -87,8 +110,12 @@ class HybridTradingEnv(gym.Env):
         
         with torch.no_grad():
             tensor_obs = torch.tensor(norm_obs, dtype=torch.float32).unsqueeze(0).to(self.device)
-            logits = self.oracle(tensor_obs)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            # Return dummy probabilities if the Oracle weights aren't loaded yet
+            if hasattr(self.oracle, 'fc'):
+                logits = self.oracle(tensor_obs)
+                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            else:
+                probs = [0.33, 0.33, 0.33]
             
         info = self._get_info()
         equity_ratio = info["equity"] / self.initial_balance
@@ -122,8 +149,8 @@ class HybridTradingEnv(gym.Env):
         current_atr = self.df.loc[self.current_step, 'env_atr']
         
         reward = 0.0
-        trade_closed_this_step = False  # --- THE STATE LOCK HACK ---
         
+        # Position Management
         if self.position != 0:
             self.bars_held += 1
             if self.position == 1: 
@@ -132,36 +159,31 @@ class HybridTradingEnv(gym.Env):
                     self.balance += trade_profit
                     reward += trade_profit
                     self.position = 0
-                    trade_closed_this_step = True
                 elif current_high >= self.tp_price:
                     trade_profit = (self.tp_price - self.entry_price) * self.position_size - self.commission
                     self.balance += trade_profit
                     reward += trade_profit
                     self.position = 0
-                    trade_closed_this_step = True
             elif self.position == -1:
                 if current_high >= self.sl_price:
                     trade_profit = (self.entry_price - self.sl_price) * self.position_size - self.commission
                     self.balance += trade_profit
                     reward += trade_profit
                     self.position = 0
-                    trade_closed_this_step = True
                 elif current_low <= self.tp_price:
                     trade_profit = (self.entry_price - self.tp_price) * self.position_size - self.commission
                     self.balance += trade_profit
                     reward += trade_profit
                     self.position = 0
-                    trade_closed_this_step = True
                     
             if self.position != 0 and self.bars_held >= self.max_hold:
                 trade_profit = ((current_price - self.entry_price) if self.position == 1 else (self.entry_price - current_price)) * self.position_size - self.spread - self.commission
                 self.balance += trade_profit
                 reward += trade_profit
                 self.position = 0
-                trade_closed_this_step = True
 
-        # Ensure we don't open a new trade on the exact same step the old one closed
-        if self.position == 0 and not trade_closed_this_step:
+        # Position Entry
+        if self.position == 0:
             direction_action = action[0] 
             tp_mult_action = action[1] 
             
@@ -171,6 +193,7 @@ class HybridTradingEnv(gym.Env):
                 
                 safe_atr = max(current_atr, 0.1)
                 self.position_size = risk_dollar_amount / safe_atr 
+                
                 tp_multiplier = np.interp(tp_mult_action, [-1.0, 1.0], [1.0, 3.0])
                 
                 self.balance -= self.commission
