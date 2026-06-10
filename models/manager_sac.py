@@ -54,7 +54,7 @@ def train_manager(data_path: str, oracle_path: str, scaler_path: str, total_time
         verbose=1,
         learning_rate=3e-4,
         batch_size=256,
-        ent_coef='auto', # Automatically tunes entropy to balance exploration vs. risk management
+        ent_coef=0.1,
         gamma=0.99,
         tensorboard_log=f"./sac_manager_tensorboard_{session.lower()}/"
     )

@@ -150,45 +150,18 @@ class HybridTradingEnv(gym.Env):
         
         reward = 0.0
         
-        # Position Management
-        if self.position != 0:
-            self.bars_held += 1
-            if self.position == 1: 
-                if current_low <= self.sl_price:
-                    trade_profit = (self.sl_price - self.entry_price) * self.position_size - self.commission
-                    self.balance += trade_profit
-                    reward += trade_profit
-                    self.position = 0
-                elif current_high >= self.tp_price:
-                    trade_profit = (self.tp_price - self.entry_price) * self.position_size - self.commission
-                    self.balance += trade_profit
-                    reward += trade_profit
-                    self.position = 0
-            elif self.position == -1:
-                if current_high >= self.sl_price:
-                    trade_profit = (self.entry_price - self.sl_price) * self.position_size - self.commission
-                    self.balance += trade_profit
-                    reward += trade_profit
-                    self.position = 0
-                elif current_low <= self.tp_price:
-                    trade_profit = (self.entry_price - self.tp_price) * self.position_size - self.commission
-                    self.balance += trade_profit
-                    reward += trade_profit
-                    self.position = 0
-                    
-            if self.position != 0 and self.bars_held >= self.max_hold:
-                trade_profit = ((current_price - self.entry_price) if self.position == 1 else (self.entry_price - current_price)) * self.position_size - self.spread - self.commission
-                self.balance += trade_profit
-                reward += trade_profit
-                self.position = 0
-
+        trade_closed_this_step = False 
+        
         # Position Entry
-        if self.position == 0:
+        if self.position == 0 and not trade_closed_this_step:
             direction_action = action[0] 
             tp_mult_action = action[1] 
             
-            if abs(direction_action) > 0.2: 
-                risk_pct = np.interp(abs(direction_action), [0.2, 1.0], [0.01, 0.05])
+            # THE FIX: Lower the threshold so the initial network can actually trigger a trade.
+            if abs(direction_action) > 0.25: 
+                
+                # Maintain the strict, conservative risk profile you set up earlier!
+                risk_pct = np.interp(abs(direction_action), [0.25, 1.0], [0.005, 0.02])
                 risk_dollar_amount = self.balance * risk_pct
                 
                 safe_atr = max(current_atr, 0.1)
@@ -210,6 +183,8 @@ class HybridTradingEnv(gym.Env):
                     self.sl_price = self.entry_price + current_atr
                     self.tp_price = self.entry_price - (current_atr * tp_multiplier)
                 self.bars_held = 0
+            else:
+                reward += 0.01
 
         info = self._get_info()
         
@@ -218,6 +193,10 @@ class HybridTradingEnv(gym.Env):
             
         if info["equity"] <= (self.initial_balance * 0.90):
             terminated = True
-            reward -= 1000 
+            reward -= (self.initial_balance * 0.10) 
 
-        return self._next_observation(), reward, terminated, truncated, info
+        scaled_reward = reward / self.initial_balance
+        scaled_reward = scaled_reward * 10.0
+        scaled_reward = np.clip(scaled_reward, -1.0, 1.0)
+
+        return self._next_observation(), scaled_reward, terminated, truncated, info

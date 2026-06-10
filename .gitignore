@@ -9,3 +9,6 @@ saved_models/
 PREVIOUS STABLE MEMORY
 vec_normalize_london.pkl
 advanced_forward_journal.csv
+sac_manager_tensorboard_london
+master_diagnostic_log.txt
+exported_metrics
