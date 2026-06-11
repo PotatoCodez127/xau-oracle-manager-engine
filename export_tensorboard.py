@@ -37,5 +37,5 @@ def export_tfevents_to_csv(log_dir_path):
 if __name__ == "__main__":
     # Point this directly to the folder containing your .tfevents file
     # Based on your previous logs, this should be the correct path:
-    log_folder = "./models/sac_manager_tensorboard_london/SAC_6"
+    log_folder = "./models/sac_manager_tensorboard_london/SAC_1"
     export_tfevents_to_csv(log_folder)
