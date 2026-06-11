@@ -66,7 +66,7 @@ class OracleLSTM(nn.Module):
             hidden_dim, 
             num_layers=num_layers, 
             batch_first=True, 
-            dropout=0.2 if num_layers > 1 else 0.0
+            dropout=0.3 if num_layers > 1 else 0.0
         )
         
         # Fully connected layer maps the final LSTM hidden state to our 3 probabilities
@@ -112,7 +112,7 @@ def train_oracle(csv_path: str, scaler_path: str = './oracle_scaler.npz', epochs
     criterion = nn.CrossEntropyLoss(weight=weights_tensor)
     
     # Adam optimizer with Weight Decay (L2 Regularization) to prevent overfitting
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=5e-5)
     
     print(f"Beginning supervised network optimization for {epochs} epochs...")
     for epoch in range(epochs):
