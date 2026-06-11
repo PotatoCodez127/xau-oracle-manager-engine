@@ -163,48 +163,69 @@ class HybridTradingEnv(gym.Env):
         trade_closed_this_step = False 
         
         # ==========================================
-        # 1. MANAGE ACTIVE POSITIONS (THE MISSING LOGIC)
+        # 1. MANAGE ACTIVE POSITIONS (WITH INTRA-CANDLE RESOLUTION)
         # ==========================================
         if self.position != 0:
             self.bars_held += 1
+            current_open = self.df.loc[self.current_step, 'env_open']
+            
+            # Calculate distance from open to targets to estimate what was hit first
+            dist_to_sl = abs(current_open - self.sl_price)
+            dist_to_tp = abs(current_open - self.tp_price)
             
             # Check LONG Exits
             if self.position == 1:
-                if current_low <= self.sl_price:
+                hit_sl = current_low <= self.sl_price
+                hit_tp = current_high >= self.tp_price
+                
+                # Intra-candle ambiguity resolution
+                if hit_sl and hit_tp:
+                    if dist_to_sl < dist_to_tp:
+                        hit_tp = False  # SL was physically closer to the open, hit first
+                    else:
+                        hit_sl = False  # TP hit first
+                        
+                if hit_sl:
                     pnl = (self.sl_price - self.entry_price) * self.position_size 
                     self.balance += pnl
-                    reward += pnl  # Normal penalty for a loss
+                    reward += pnl  
                     trade_closed_this_step = True
-                elif current_high >= self.tp_price:
+                elif hit_tp:
                     pnl = (self.tp_price - self.entry_price) * self.position_size 
                     self.balance += pnl
-                    reward += (pnl * 2.0)  # 🔥 ASYMMETRIC REWARD: 2x multiplier for winning
+                    reward += (pnl * 2.0)  
                     trade_closed_this_step = True
 
             # Check SHORT Exits
             elif self.position == -1:
-                if current_high >= self.sl_price:
+                hit_sl = current_high >= self.sl_price
+                hit_tp = current_low <= self.tp_price
+                
+                # Intra-candle ambiguity resolution
+                if hit_sl and hit_tp:
+                    if dist_to_sl < dist_to_tp:
+                        hit_tp = False  
+                    else:
+                        hit_sl = False  
+                        
+                if hit_sl:
                     pnl = (self.entry_price - self.sl_price) * self.position_size 
                     self.balance += pnl
-                    reward += pnl  # Normal penalty for a loss
+                    reward += pnl  
                     trade_closed_this_step = True
-                elif current_low <= self.tp_price:
+                elif hit_tp:
                     pnl = (self.entry_price - self.tp_price) * self.position_size 
-                    reward += (pnl * 2.0)  # 🔥 ASYMMETRIC REWARD: 2x multiplier for winning
+                    reward += (pnl * 2.0)  
                     self.balance += pnl
                     trade_closed_this_step = True
             
             # Force close if held beyond maximum structural tolerance
             if not trade_closed_this_step and self.bars_held >= self.max_hold:
-                if self.position == 1:
-                    pnl = (current_price - self.entry_price) * self.position_size
-                else:
-                    pnl = (self.entry_price - current_price) * self.position_size
+                pnl = (current_price - self.entry_price) * self.position_size if self.position == 1 else (self.entry_price - current_price) * self.position_size
                 reward += pnl
                 self.balance += pnl
                 trade_closed_this_step = True
 
-            # Reset state if trade exited
             if trade_closed_this_step:
                 self.position = 0
                 self.position_size = 0.0
@@ -217,10 +238,11 @@ class HybridTradingEnv(gym.Env):
             direction_action = action[0] 
             tp_mult_action = action[1] 
             
-            # Lowered threshold to bypass Deadzone Trap
-            if abs(direction_action) > 0.25: 
+            # Lowered, smoothed threshold mapping to prevent SAC gradient cliffs
+            if abs(direction_action) > 0.1: 
                 
-                risk_pct = np.interp(abs(direction_action), [0.25, 1.0], [0.005, 0.02])
+                # Linearly interpolate risk scale to ensure smooth gradient descent mapping
+                risk_pct = np.interp(abs(direction_action), [0.1, 1.0], [0.005, 0.02])
                 risk_dollar_amount = self.balance * risk_pct
                 
                 safe_atr = max(current_atr, 0.1)
@@ -231,28 +253,20 @@ class HybridTradingEnv(gym.Env):
                 self.balance -= self.commission
                 reward -= self.commission
                 
+                # Widened Stop Loss buffer to 1.5 ATR for structural breathing room
+                sl_distance = current_atr * 1.5 
+                
                 if direction_action > 0: 
                     self.position = 1
                     self.entry_price = current_price + self.spread
-                    self.sl_price = self.entry_price - current_atr
+                    self.sl_price = self.entry_price - sl_distance
                     self.tp_price = self.entry_price + (current_atr * tp_multiplier)
                 else: 
                     self.position = -1
                     self.entry_price = current_price - self.spread
-                    self.sl_price = self.entry_price + current_atr
+                    self.sl_price = self.entry_price + sl_distance
                     self.tp_price = self.entry_price - (current_atr * tp_multiplier)
                 self.bars_held = 0
-            else:
-                # Agent chose to hold cash. 
-                # Check if the Oracle was highly confident we should have traded.
-                oracle_long_prob = self._next_observation()[3] # Index of Long Prob
-                oracle_short_prob = self._next_observation()[4] # Index of Short Prob
-                
-                if max(oracle_long_prob, oracle_short_prob) > 0.85:
-                    # 🔥 MISSED OPPORTUNITY STING: Penalize ignoring a golden setup
-                    reward -= (self.initial_balance * 0.0005) 
-                else:
-                    reward += 0.0
 
         # ==========================================
         # 3. GLOBAL STATE & METRICS
