@@ -21,6 +21,7 @@ dependencies = [
     "stable-baselines3>=2.1.0",
     "ruff>=0.1.0",
     "black>=23.0.0",
+    "matplotlib"
 ]
 
 [project.optional-dependencies]
