@@ -13,11 +13,14 @@ from environment.hybrid_env import HybridTradingEnv
 def mock_feature_data():
     """Generates 50 rows of dummy market data to test environment boundaries."""
     dates = pd.date_range(start="2026-06-01", periods=50, freq="15min")
+    highs = np.random.uniform(2010, 2015, 50)
+    lows = np.random.uniform(2000, 2005, 50)
     data = {
         "time": dates,
-        "env_high": np.random.uniform(2010, 2015, 50),
-        "env_low": np.random.uniform(2000, 2005, 50),
-        "env_close": np.random.uniform(2005, 2010, 50),
+        "env_open": np.random.uniform(lows, highs, 50),
+        "env_high": highs,
+        "env_low": lows,
+        "env_close": np.random.uniform(lows, highs, 50),
         "dist_ema_50": np.random.uniform(-0.01, 0.01, 50),  # Mock stationary feature
     }
     return pd.DataFrame(data)

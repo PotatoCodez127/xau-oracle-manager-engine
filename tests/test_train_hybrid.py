@@ -17,11 +17,15 @@ def mock_forward_test_files(tmp_path):
     """Sets up a complete ecosystem of files for the final inference test."""
     # 1. Dummy Market Data
     data_length = 50
+    dates = pd.date_range(start="2026-07-01", periods=data_length, freq="15min")
+    highs = np.random.uniform(2010, 2015, data_length)
+    lows = np.random.uniform(2000, 2005, data_length)
     data = {
-        "time": pd.date_range(start="2026-07-01", periods=data_length, freq="15min"),
-        "env_high": np.random.uniform(2010, 2015, data_length),
-        "env_low": np.random.uniform(2000, 2005, data_length),
-        "env_close": np.random.uniform(2005, 2010, data_length),
+        "time": dates,
+        "env_open": np.random.uniform(lows, highs, data_length),
+        "env_high": highs,
+        "env_low": lows,
+        "env_close": np.random.uniform(lows, highs, data_length),
         "dist_ema_50": np.random.uniform(-0.02, 0.02, data_length),
     }
     df_path = tmp_path / "mock_test_data.csv"

@@ -25,6 +25,7 @@ class HybridTradingEnv(gym.Env):
         initial_balance: float = 10000.0,
         oracle_path: str = "../models/oracle_lstm.pth",
         scaler_path: str = "../models/oracle_scaler.npz",
+        is_training: bool = True,
     ):
         super(HybridTradingEnv, self).__init__()
 
@@ -48,6 +49,21 @@ class HybridTradingEnv(gym.Env):
             scaler_data = np.load(scaler_path)
             self.feature_mean = scaler_data["mean"]
             self.feature_std = scaler_data["std"]
+        elif is_training:
+            # Safely generate and freeze boundaries inside active training mode partitions
+            self.feature_mean = (
+                np.mean(self.data, axis=0)
+                if self.data.shape[1] > 0
+                else np.array([0.0], dtype=np.float32)
+            )
+            self.feature_std = (
+                (np.std(self.data, axis=0) + 1e-8)
+                if self.data.shape[1] > 0
+                else np.array([1.0], dtype=np.float32)
+            )
+            if os.path.dirname(scaler_path):
+                os.makedirs(os.path.dirname(scaler_path), exist_ok=True)
+            np.savez(scaler_path, mean=self.feature_mean, std=self.feature_std)
         else:
             # Enforce strict frozen parameter propagation to block lookahead validation leakage
             raise FileNotFoundError(

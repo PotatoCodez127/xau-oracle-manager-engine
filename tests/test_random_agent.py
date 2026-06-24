@@ -10,16 +10,27 @@ from environment.hybrid_env import HybridTradingEnv
 
 
 def test_environment_mechanics():
-    print("Loading test dataset...")
-    # Use your labeled features file for a quick test
-    df = pd.read_csv("../data/processed/master_features_15m.csv")
+    print("Generating isolated test dataset...")
+    dates = pd.date_range(start="2026-06-01", periods=1000, freq="15min")
+    highs = np.random.uniform(2010, 2015, 1000)
+    lows = np.random.uniform(2000, 2005, 1000)
+    df = pd.DataFrame(
+        {
+            "time": dates,
+            "env_open": np.random.uniform(lows, highs, 1000),
+            "env_high": highs,
+            "env_low": lows,
+            "env_close": np.random.uniform(lows, highs, 1000),
+            "dist_ema_50": np.random.uniform(-0.01, 0.01, 1000),
+        }
+    )
 
     env = HybridTradingEnv(
         df=df,
-        session="LONDON",
+        session="ALL",
         window_size=30,
-        oracle_path="../models/oracle_lstm.pth",
-        scaler_path="../models/oracle_scaler.npz",
+        oracle_path="dummy_oracle.pth",
+        scaler_path="dummy_scaler.npz",
     )
 
     obs, info = env.reset()
