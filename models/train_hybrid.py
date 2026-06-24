@@ -1,91 +1,112 @@
 import os
 import sys
-import pandas as pd
-import numpy as np
+
 import matplotlib.pyplot as plt
+import pandas as pd
 from stable_baselines3 import SAC
 
 # Route system path to include the parent project directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from environment.hybrid_env import HybridTradingEnv
 
-def run_forward_test(model_path: str, test_data_path: str, oracle_path: str, scaler_path: str, session: str):
+
+def run_forward_test(
+    model_path: str,
+    test_data_path: str,
+    oracle_path: str,
+    scaler_path: str,
+    session: str,
+):
     print(f"Loading Out-of-Sample Validation Data from {test_data_path}...")
     if not os.path.exists(test_data_path):
-        raise FileNotFoundError(f"Missing test data file at {test_data_path}. Please generate it using your main_processor.")
-    
+        raise FileNotFoundError(
+            f"Missing test data file at {test_data_path}. "
+            f"Please generate it using your main_processor."
+        )
+
     df_test = pd.read_csv(test_data_path)
-    
+
     print("Initializing Hybrid Environment in Forward Inference Mode...")
     env = HybridTradingEnv(
-        df=df_test, 
-        session=session, 
-        window_size=30, 
-        oracle_path=oracle_path, 
-        scaler_path=scaler_path
+        df=df_test,
+        session=session,
+        window_size=30,
+        oracle_path=oracle_path,
+        scaler_path=scaler_path,
     )
-    
+
     print(f"Loading Trained SAC Capital Allocation Brain from {model_path}...")
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Missing SAC model file at {model_path}. Complete training first.")
-    
+        raise FileNotFoundError(
+            f"Missing SAC model file at {model_path}. Complete training first."
+        )
+
     model = SAC.load(model_path)
-    
+
     # Reset environment states
     obs, info = env.reset()
     initial_balance = env.initial_balance
-    
+
     # Metric Storage Matrices
     equity_curve = [initial_balance]
     trade_journal = []
-    
+
     winning_pnls = []
     losing_pnls = []
     holding_times = []
-    
+
     active_trade_entry_step = None
     entry_balance = None
     previous_position = 0
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print(f"   STARTING LIVE HYBRID SIMULATION ({session})")
-    print("="*50)
-    
+    print("=" * 50)
+
     done = False
-    
+
     while not done:
         # SAC outputs continuous actions: [Direction/Size, TP Multiplier]
         # deterministic=True disables exploration noise for pure evaluation
         action, _states = model.predict(obs, deterministic=True)
-        
+
         # Advance the simulation universe by exactly one candle
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
-        
-        current_equity = info['equity']
-        current_balance = info['balance']
-        current_step = info['step']
-        position = info['position']
-        
+
+        current_equity = info["equity"]
+        current_balance = info["balance"]
+        current_step = info["step"]
+        position = info["position"]
+
         equity_curve.append(current_equity)
-        
+
         # --- snipe and track live trades ---
         if previous_position == 0 and position != 0:
             active_trade_entry_step = current_step
-            entry_balance = current_balance + env.commission 
-            
+            entry_balance = current_balance + env.commission
+
             direction_name = "LONG" if position == 1 else "SHORT"
-            print(f"[LIVE STREAM] 🎯 Entry -> Step: {current_step:<4} | Type: {direction_name:<5} | Units: {env.position_size:.2f} oz")
-            print(f"              SL Target: ${env.sl_price:.2f} | TP Target: ${env.tp_price:.2f}")
-            
+            print(
+                f"[LIVE STREAM] 🎯 Entry -> Step: {current_step:<4} | Type: {direction_name:<5}"
+                f" | Units: {env.position_size:.2f} oz"
+            )
+            print(
+                f"              SL Target: ${env.sl_price:.2f} | TP Target: ${env.tp_price:.2f}"
+            )
+
         elif previous_position != 0 and (position == 0 or done):
             if active_trade_entry_step is not None:
                 bars_held = current_step - active_trade_entry_step
                 holding_times.append(bars_held)
-                
+
                 # Realized outcome OR unrealized outcome if forced closed at EOF
-                trade_pnl = current_balance - entry_balance if position == 0 else current_equity - entry_balance
-                
+                trade_pnl = (
+                    current_balance - entry_balance
+                    if position == 0
+                    else current_equity - entry_balance
+                )
+
                 if trade_pnl > 0:
                     winning_pnls.append(trade_pnl)
                     outcome_str = f"✅ TAKE PROFIT (+${trade_pnl:.2f})"
@@ -95,29 +116,36 @@ def run_forward_test(model_path: str, test_data_path: str, oracle_path: str, sca
                         outcome_str = f"🛑 MARGIN CALL (-${abs(trade_pnl):.2f})"
                     else:
                         outcome_str = f"❌ STOP LOSS (-${abs(trade_pnl):.2f})"
-                    
-                print(f"[LIVE STREAM] 🏛️ Exit  -> Step: {current_step:<4} | Outcome: {outcome_str} | Held: {bars_held} bars | Account Value: ${current_equity:.2f}\n")
+
+                print(
+                    f"[LIVE STREAM] 🏛️ Exit  -> Step: {current_step:<4} | Outcome: {outcome_str}"
+                    f" | Held: {bars_held} bars | Account Value: ${current_equity:.2f}\n"
+                )
                 active_trade_entry_step = None
-                
+
         previous_position = position
-        
+
         # Append to journal structure if a trade is active or processing actions
         if abs(action[0]) > 0.2:
-            trade_journal.append({
-                "step": current_step,
-                "action_direction": action[0],
-                "action_tp_mult": action[1],
-                "position": position,
-                "balance": current_balance,
-                "equity": current_equity,
-                "max_drawdown_pct": round(((env.peak_equity - current_equity) / env.peak_equity) * 100, 4)
-            })
+            trade_journal.append(
+                {
+                    "step": current_step,
+                    "action_direction": action[0],
+                    "action_tp_mult": action[1],
+                    "position": position,
+                    "balance": current_balance,
+                    "equity": current_equity,
+                    "max_drawdown_pct": round(
+                        ((env.peak_equity - current_equity) / env.peak_equity) * 100, 4
+                    ),
+                }
+            )
 
     # --- PERFORMANCE ANALYSIS ENGINE ---
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("      HYBRID ORACLE-MANAGER ENGINE SIMULATION COMPLETE")
-    print("="*60)
-    
+    print("=" * 60)
+
     total_wins = len(winning_pnls)
     total_losses = len(losing_pnls)
     total_trades = total_wins + total_losses
@@ -128,13 +156,21 @@ def run_forward_test(model_path: str, test_data_path: str, oracle_path: str, sca
 
     print(f"Initial Starting Allocation:   ${initial_balance:,.2f}")
     print(f"Final Ending Portfolio Value:  ${current_equity:,.2f}")
-    print(f"Net Strategy Realized PnL:     ${net_profit:,.2f} ({(net_profit/initial_balance)*100:.2f}%)")
+    print(
+        f"Net Strategy Realized PnL:     ${net_profit:,.2f} "
+        f"({(net_profit/initial_balance)*100:.2f}%)"
+    )
     print(f"Maximum Peak-to-Valley DD:     {max_drawdown_pct:.2f}%")
     print("-" * 60)
     print(f"Total Structural Trades Executed: {total_trades}")
-    print(f"Strategy Edge Win Rate:           {win_rate:.2f}% ({total_wins} Wins / {total_losses} Losses)")
-    print(f"Average Position Holding Time:    {avg_hold:.1f} candles ({avg_hold * 15 / 60:.2f} hours)")
-    
+    print(
+        f"Strategy Edge Win Rate:           {win_rate:.2f}% ({total_wins} Wins / "
+        f"{total_losses} Losses)"
+    )
+    print(
+        f"Average Position Holding Time:    {avg_hold:.1f} candles ({avg_hold * 15 / 60:.2f} hours)"
+    )
+
     # Save the execution sequence
     if trade_journal:
         journal_df = pd.DataFrame(trade_journal)
@@ -142,13 +178,26 @@ def run_forward_test(model_path: str, test_data_path: str, oracle_path: str, sca
         os.makedirs("../logs", exist_ok=True)
         journal_df.to_csv(journal_path, index=False)
         print(f"\nSaved master trading journal logs to: {journal_path}")
-    
+
     # Render Strategy Equity Performance Curve (Skip if running headless)
     if not os.environ.get("HEADLESS_TESTING"):
         plt.figure(figsize=(12, 6))
-        plt.plot(equity_curve, label='Hybrid System Account Equity', color='darkcyan', linewidth=1.8)
-        plt.axhline(y=initial_balance, color='crimson', linestyle='--', label='Initial Capital Anchor')
-        plt.title(f"Aurelius Engine Out-of-Sample Forward Test ({session})\nSupervised Oracle + SAC Portfolio Manager Integration")
+        plt.plot(
+            equity_curve,
+            label="Hybrid System Account Equity",
+            color="darkcyan",
+            linewidth=1.8,
+        )
+        plt.axhline(
+            y=initial_balance,
+            color="crimson",
+            linestyle="--",
+            label="Initial Capital Anchor",
+        )
+        plt.title(
+            f"Aurelius Engine Out-of-Sample Forward Test ({session})\n"
+            f"Supervised Oracle + SAC Portfolio Manager Integration"
+        )
         plt.xlabel("Timeline Steps (15m Sequential Candles)")
         plt.ylabel("Portfolio Value ($)")
         plt.legend()
@@ -156,11 +205,13 @@ def run_forward_test(model_path: str, test_data_path: str, oracle_path: str, sca
         plt.tight_layout()
         plt.show()
 
+
 if __name__ == "__main__":
     run_forward_test(
-        model_path='./manager_sac_london.zip',
-        test_data_path='../data/processed/master_features_15m.csv', # Replace with a strict out-of-sample file later
-        oracle_path='./oracle_lstm.pth',
-        scaler_path='./oracle_scaler.npz',
-        session='LONDON'
+        model_path="./manager_sac_london.zip",
+        # Replace with a strict out-of-sample file later
+        test_data_path="../data/processed/master_features_15m.csv",
+        oracle_path="./oracle_lstm.pth",
+        scaler_path="./oracle_scaler.npz",
+        session="LONDON",
     )

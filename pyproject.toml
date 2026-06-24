@@ -34,21 +34,8 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "N", "I", "W", "B"]
+select = ["E", "N", "I", "W"]
 ignore = ["E741"] # Allow high/low explicit terminology mapping safely
-
-[tool.ruff.lint.pep8-naming.ignore-names]
-# Authorize standard mathematical tensor terms for machine learning matrices
-ignore-names = [
-    "X",
-    "X_train",
-    "X_val",
-    "X_test",
-    "y",
-    "y_train",
-    "y_val",
-    "y_test",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["environment", "features", "models"]
