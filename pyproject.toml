@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xau-dl-engine"
+version = "3.2.0"
+description = "Hybrid Oracle-Manager Deep Reinforcement Learning Trading Architecture for XAUUSD"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "gymnasium>=0.28.1",
+    "stable-baselines3>=2.1.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["export_tensorboard"]
+
+[tool.setuptools.packages.find]
+include = ["environment*", "features*", "models*", "tests*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "N", "I", "W", "B"]
+ignore = ["E741"] # Allow high/low explicit terminology mapping safely
+
+[tool.ruff.lint.pep8-naming.ignore-names]
+# Authorize standard mathematical tensor terms for machine learning matrices
+ignore-names = [
+    "X",
+    "X_train",
+    "X_val",
+    "X_test",
+    "y",
+    "y_train",
+    "y_val",
+    "y_test",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["environment", "features", "models"]
